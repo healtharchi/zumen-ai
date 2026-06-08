@@ -1035,6 +1035,7 @@ function DrawingAIPanel({ project, sp, onChange }) {
           {busy ? '積算中…（少々お待ちください）' : '🔍 図面をAIで積算して入力欄に反映'}
         </button>
         {status && <p className={'text-sm font-bold ' + (status.err ? 'text-red-700' : 'text-green-700')}>{status.msg}</p>}
+        <p className="text-xs text-slate-400">💡 1回の解析でClaude APIの少額料金がかかります（主に図面の枚数・サイズで変動）。必要な図面だけ入れると安く済みます。</p>
         {/* 反映結果：AIが読んだ値を全部表示。チェックで採用／外すと係数推定に戻る */}
         {result && (
           <div className="bg-white border border-amber-200 rounded p-3">
