@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>使い方ガイド｜スマート見積＋図面AI（実験版）｜HEALTH ARCHI</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: 'Noto Sans JP','Hiragino Sans','Yu Gothic UI','Meiryo',sans-serif; font-size:18px; line-height:1.6; color:#1B2B4B; background:#F8FAFC; }
+  .card { background:#fff; border:2px solid #E2E8F0; border-radius:14px; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<header class="bg-[#1B2B4B] text-white px-4 py-3 flex justify-between items-center shadow-md">
+  <div class="flex items-center gap-2 min-w-0">
+    <span class="font-bold text-lg tracking-wide whitespace-nowrap">HEALTH <span class="text-[#F08300]">ARCHI</span></span>
+    <span class="text-slate-300 text-sm truncate">｜使い方ガイド（図面AI実験版）</span>
+  </div>
+  <a href="index.html" class="border border-white/40 hover:bg-white/10 text-white text-sm font-medium px-3 py-2 rounded whitespace-nowrap shrink-0" style="min-height:44px;display:flex;align-items:center;">🏠 ツール本体へ戻る</a>
+</header>
+
+<main class="max-w-3xl mx-auto px-4 py-6 space-y-6">
+
+  <div class="card p-4 bg-amber-50 border-amber-200">
+    <h1 class="text-xl font-bold mb-1">🧪 これは「スマート見積＋図面AI」の実験版です</h1>
+    <p>いつものスマート見積システムに、<strong>「図面を放り込むと、外周長・床面積などの入力欄にAIが自動で数字を入れてくれる」</strong>機能を実験的に足したものです。本番の公開ツールとは別物（試作）で、精度を確かめる段階です。</p>
+  </div>
+
+  <section class="card p-4 space-y-3">
+    <h2 class="text-lg font-bold">使う前の準備（最初に1回だけ）</h2>
+    <ol class="list-decimal pl-6 space-y-2">
+      <li>見積を開いて「1. 規模」タブを表示します。</li>
+      <li>一番上の <strong>🧪 図面AIで自動入力</strong> パネルの中の「🔑 Claude APIキー」を開きます。</li>
+      <li>お持ちの Claude API キー（<code>sk-ant-…</code>）を貼り付け、「🔒 キーを保存」を押します。</li>
+      <li>キーは<strong>この端末のブラウザの中だけ</strong>に保存されます（外部サーバーには送りません。送り先はClaude公式のみ）。</li>
+    </ol>
+  </section>
+
+  <section class="card p-4 space-y-3">
+    <h2 class="text-lg font-bold">図面から自動入力する流れ</h2>
+    <ol class="list-decimal pl-6 space-y-2">
+      <li>「1. 規模」タブの <strong>🧪 図面AIで自動入力</strong> パネルに、図面（PDF・JPG・PNG）を<strong>ドラッグ＆ドロップ</strong>します。</li>
+      <li><strong>図面の種類</strong>を選びます（平面図／立面図／屋根伏図）。種類で読み取る数値が変わります。</li>
+      <li><strong>縮尺の手がかり（任意）</strong>に、わかっている寸法を1つ入れると精度が上がります（例：「南面の通り芯が7280mm」「1マス910mm」）。</li>
+      <li>オレンジの <strong>「🔍 図面をAIで読み取って入力欄に反映」</strong> を押します（数十秒）。</li>
+      <li>読み取れた値が、下の <strong>外周長・建築面積・各階床面積などの欄に自動で入ります</strong>。右側の「🔄 自動算出」と見積金額もその場で更新されます。</li>
+      <li>入った数字は、下の入力欄でいつでも手直しできます（AIはあくまで下書き）。</li>
+    </ol>
+  </section>
+
+  <section class="card p-4 space-y-3">
+    <h2 class="text-lg font-bold">仕組みのポイント</h2>
+    <ul class="list-disc pl-6 space-y-2">
+      <li>AIが<strong>自信を持って読めた値（信頼度60%以上）だけ</strong>を自動入力します。</li>
+      <li>読めなかった項目は<strong>空欄のまま</strong>＝従来どおり坪数などからの係数推定で見積が成立します（破綻しません）。</li>
+      <li>パネルの「入力欄へ反映した値」で、何をどの信頼度で入れたか確認できます。</li>
+    </ul>
+  </section>
+
+  <section class="card p-4 space-y-3">
+    <h2 class="text-lg font-bold">うまくいかないとき</h2>
+    <ul class="list-disc pl-6 space-y-2">
+      <li><strong>「APIキーが正しくないようです(401)」</strong>→ 🔑からキーを入れ直してください。</li>
+      <li><strong>何も自動入力されない</strong>→ 縮尺の手がかりに、わかる寸法を1つ入れてみてください（精度の生命線です）。</li>
+      <li><strong>図面がぼやけている</strong>→ できるだけ鮮明な画像／PDFを使うと精度が上がります。</li>
+    </ul>
+  </section>
+
+  <div class="text-center py-4">
+    <a href="index.html" class="bg-[#1B2B4B] hover:opacity-90 text-white font-bold px-6 rounded-lg inline-flex items-center" style="min-height:48px;">🏠 ツール本体へ戻る</a>
+  </div>
+
+</main>
+</body>
+</html>
