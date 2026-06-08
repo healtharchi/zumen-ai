@@ -830,12 +830,26 @@ function DrawingAIPanel({ project, sp, onChange }) {
   const [file, setFile] = useState(null);
   const [drawingType, setDrawingType] = useState('平面図');
   const [scaleHint, setScaleHint] = useState('');
-  const [threshold, setThreshold] = useState(0.6);
+  const [threshold, setThreshold] = useState(0.5);
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [applied, setApplied] = useState(null);
+  const [result, setResult] = useState(null);
   const fileRef = useRef(null);
   const [drag, setDrag] = useState(false);
+
+  // AIが読んだ1値を入力欄へ反映/解除する（on=採用, off=空欄に戻す＝係数推定に委ねる）
+  const applyItem = (it, on) => {
+    const val = on ? String(it.value) : '';
+    if (it.kind === 'scale') setScale(it.target, val);
+    else setManualQty(it.target, val);
+  };
+  const toggleAdopt = (id) => {
+    const cur = result && result.items.find(it => it.id === id);
+    if (!cur) return;
+    const nextAdopted = !cur.adopted;
+    applyItem(cur, nextAdopted);
+    setResult(r => ({ ...r, items: r.items.map(it => it.id === id ? { ...it, adopted: nextAdopted } : it) }));
+  };
 
   const saveKey = () => {
     const v = (apiKey || '').trim();
@@ -892,14 +906,14 @@ function DrawingAIPanel({ project, sp, onChange }) {
       '・tatami_count＝畳の枚数(帖)。和室があれば。',
       '・interior_doors＝室内ドアの枚数。平面図の建具記号から数える。',
       '・sliding_doors＝引き戸の枚数。平面図の建具記号から数える。',
-      '※ 仕上表・建具表が無い場合、部屋の用途と床面積から推定してよい（その場合は source="estimated"、confidence を低めに）。',
+      '※ 仕上表・建具表が無くても、各室の用途と床面積から【必ず】概算値を出してください（source="estimated"・confidence は低めでOK）。まったく見当がつかない項目だけ省略可。',
       '',
       '【縮尺の手がかり】' + (scaleHint.trim() ? scaleHint.trim() : '（指定なし。寸法線・寸法値・通り芯から縮尺を推定）'), '',
       '【ルール】',
       '・寸法線や記号から実際に読めた値は source="measured"、確信度に応じ confidence を 0.0〜1.0 で付ける。',
       '・読めず用途から推定した値は source="estimated"、confidence を低めにする（無理に断定しない）。',
       '・basis に「何を基準にどう算出/推定したか」を日本語で簡潔に書く。',
-      '・この図面で判断できない項目は、その配列に入れなくてよい（空配列でも可）。',
+      '・中間変数(values)で、この図面の種類から判断不能な項目は入れなくてよい。内訳明細(line_quantities)は上記のとおり概算でも極力埋める。',
       '・木造2階建ての一般的な納まりを前提にしてよい。'
     ].join('\n');
   };
@@ -907,7 +921,7 @@ function DrawingAIPanel({ project, sp, onChange }) {
   const analyze = async () => {
     if (!apiKey) { setStatus({ msg: 'まず🔑APIキーを設定してください', err: true }); setKeyOpen(true); return; }
     if (!file) { setStatus({ msg: '図面をアップロードしてください', err: true }); return; }
-    setBusy(true); setApplied(null); setStatus({ msg: 'AIが図面を解析中…（数十秒かかることがあります）', err: false });
+    setBusy(true); setResult(null); setStatus({ msg: 'AIが図面を解析中…（数十秒かかることがあります）', err: false });
     const sourceBlock = file.isPdf
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: file.base64 } }
       : { type: 'image', source: { type: 'base64', media_type: file.mediaType, data: file.base64 } };
@@ -932,26 +946,22 @@ function DrawingAIPanel({ project, sp, onChange }) {
       const tb = (data.content || []).find(b => b.type === 'text');
       if (!tb) { setStatus({ msg: '⚠️ 応答を解釈できませんでした', err: true }); return; }
       const parsed = JSON.parse(tb.text);
-      const appliedList = [];   // 中間変数（規模）
-      const appliedLines = [];  // 内訳明細の数量
+      const items = [];
+      let idc = 0;
       (parsed.values || []).forEach(v => {
-        const adopt = (v.confidence || 0) >= threshold && ZUMEN_VAR_FIELD[v.variable] && isFinite(v.value) && v.value > 0;
-        if (adopt) {
-          setScale(ZUMEN_VAR_FIELD[v.variable], String(v.value));
-          appliedList.push({ label: ZUMEN_VAR_LABEL[v.variable], value: v.value, unit: v.unit || ZUMEN_VAR_UNIT[v.variable] || '', source: v.source, confidence: v.confidence, basis: v.basis || '' });
-        }
+        const field = ZUMEN_VAR_FIELD[v.variable];
+        if (!field || !isFinite(v.value) || v.value <= 0) return;
+        items.push({ id: 'v' + (idc++), kind: 'scale', target: field, label: ZUMEN_VAR_LABEL[v.variable] || v.variable, value: v.value, unit: v.unit || ZUMEN_VAR_UNIT[v.variable] || '', source: v.source, confidence: v.confidence || 0, basis: v.basis || '', adopted: (v.confidence || 0) >= threshold });
       });
       (parsed.line_quantities || []).forEach(q => {
         const def = ZUMEN_LINE_BY_KEY[q.item];
-        const adopt = def && (q.confidence || 0) >= threshold && isFinite(q.value) && q.value > 0;
-        if (adopt) {
-          setManualQty(def.no, String(q.value));
-          appliedLines.push({ no: def.no, label: def.label, value: q.value, unit: q.unit || def.unit, source: q.source, confidence: q.confidence, basis: q.basis || '' });
-        }
+        if (!def || !isFinite(q.value) || q.value <= 0) return;
+        items.push({ id: 'l' + (idc++), kind: 'line', target: def.no, no: def.no, label: def.label, value: q.value, unit: q.unit || def.unit, source: q.source, confidence: q.confidence || 0, basis: q.basis || '', adopted: (q.confidence || 0) >= threshold });
       });
-      const total = appliedList.length + appliedLines.length;
-      setApplied({ list: appliedList, lines: appliedLines, scaleBasis: parsed.scale_basis || '' });
-      setStatus({ msg: total ? ('図面から ' + total + ' 件を自動入力しました ✓（規模' + appliedList.length + '件・内訳明細' + appliedLines.length + '件）。「自動算出」と内訳明細・見積に反映済みです') : '読み取れましたが、信頼度が下限未満のため自動入力は見送りました（係数推定のまま）', err: false });
+      items.forEach(it => { if (it.adopted) applyItem(it, true); });
+      setResult({ items, scaleBasis: parsed.scale_basis || '' });
+      const adoptedCount = items.filter(it => it.adopted).length;
+      setStatus({ msg: items.length ? ('AIが ' + items.length + ' 件を読み取りました（うち ' + adoptedCount + ' 件を自動入力）。下のリストでチェックを足すと採用できます') : 'AIは数値を読み取れませんでした。縮尺の手がかり（既知寸法）を入れて再試行してください。', err: !items.length });
     } catch (err) {
       setStatus({ msg: '⚠️ 通信に失敗しました：' + err.message, err: true });
     } finally { setBusy(false); }
@@ -1012,42 +1022,35 @@ function DrawingAIPanel({ project, sp, onChange }) {
           {busy ? '解析中…' : '🔍 図面をAIで読み取って入力欄に反映'}
         </button>
         {status && <p className={'text-sm font-bold ' + (status.err ? 'text-red-700' : 'text-green-700')}>{status.msg}</p>}
-        {/* 反映結果 */}
-        {applied && (applied.list.length > 0 || applied.lines.length > 0) && (
+        {/* 反映結果：AIが読んだ値を全部表示。チェックで採用／外すと係数推定に戻る */}
+        {result && (
           <div className="bg-white border border-amber-200 rounded p-3">
-            {applied.scaleBasis && <div className="text-xs text-slate-500 mb-2">縮尺の判断：{applied.scaleBasis}</div>}
-            {applied.list.length > 0 && (
-              <div className="mb-3">
-                <div className="text-sm font-bold text-slate-700 mb-1">📐 規模（中間変数）へ反映</div>
-                <div className="space-y-1">
-                  {applied.list.map((a, i) => (
-                    <div key={i} className="flex items-center justify-between text-sm border-b border-slate-100 py-1">
-                      <span className="font-bold">{a.label}
-                        <span className={'text-xs ml-2 px-1.5 py-0.5 rounded text-white ' + (a.source === 'measured' ? 'bg-blue-600' : 'bg-slate-400')}>{a.source === 'measured' ? '実測' : '推定'}</span>
-                      </span>
-                      <span className="num">{a.value.toLocaleString('ja-JP', { maximumFractionDigits: 2 })} {a.unit}<span className="text-xs text-slate-500 ml-2">{Math.round(a.confidence * 100)}%</span></span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {applied.lines.length > 0 && (
+            {result.scaleBasis && <div className="text-xs text-slate-500 mb-2">縮尺の判断：{result.scaleBasis}</div>}
+            {result.items.length === 0 ? (
+              <p className="text-sm text-slate-600">数値を読み取れませんでした。縮尺の手がかり（既知寸法）を入れて、もう一度お試しください。</p>
+            ) : (
               <div>
-                <div className="text-sm font-bold text-slate-700 mb-1">📋 内訳明細の数量へ反映</div>
+                <div className="text-sm font-bold text-slate-700 mb-2">AIが読み取った値（✓を付けると採用＝入力欄へ反映／外すと係数推定に戻ります）</div>
                 <div className="space-y-1">
-                  {applied.lines.map((a, i) => (
-                    <div key={i} className="flex items-center justify-between text-sm border-b border-slate-100 py-1">
-                      <span className="font-bold"><span className="text-xs text-slate-400 mr-1">{a.no}</span>{a.label}
-                        <span className={'text-xs ml-2 px-1.5 py-0.5 rounded text-white ' + (a.source === 'measured' ? 'bg-blue-600' : 'bg-slate-400')}>{a.source === 'measured' ? '実測' : '推定'}</span>
+                  {result.items.map(it => (
+                    <label key={it.id} className={'flex items-start gap-2 text-sm border-b border-slate-100 py-2 cursor-pointer ' + (it.adopted ? '' : 'opacity-60')}>
+                      <input type="checkbox" checked={it.adopted} onChange={() => toggleAdopt(it.id)} className="mt-1 w-5 h-5 shrink-0" />
+                      <span className="flex-1 min-w-0">
+                        <span className="font-bold">
+                          <span className={'text-xs px-1.5 py-0.5 rounded mr-1 ' + (it.kind === 'line' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800')}>{it.kind === 'line' ? ('明細' + (it.no ? ' ' + it.no : '')) : '規模'}</span>
+                          {it.label}
+                          <span className={'text-xs ml-2 px-1.5 py-0.5 rounded text-white ' + (it.source === 'measured' ? 'bg-blue-600' : 'bg-slate-400')}>{it.source === 'measured' ? '実測' : '推定'}</span>
+                          <span className="text-xs text-slate-500 ml-2">信頼度{Math.round(it.confidence * 100)}%</span>
+                        </span>
+                        <span className="block num font-bold">{it.value.toLocaleString('ja-JP', { maximumFractionDigits: 2 })} {it.unit}</span>
+                        {it.basis && <span className="block text-xs text-slate-500">{it.basis}</span>}
                       </span>
-                      <span className="num">{a.value.toLocaleString('ja-JP', { maximumFractionDigits: 2 })} {a.unit}<span className="text-xs text-slate-500 ml-2">{Math.round(a.confidence * 100)}%</span></span>
-                    </div>
+                    </label>
                   ))}
                 </div>
-                <p className="text-xs text-slate-500 mt-1">→「2. 内訳明細」タブで、これらの数量が入っているのを確認できます。</p>
+                <p className="text-xs text-slate-500 mt-2">✓の値が「規模」入力欄・「2.内訳明細」の数量に反映され、見積が再計算されます。<span className="font-bold">推定</span>は仕上表が無いための概算です（信頼度が低めでも、確認のうえ採用できます）。各欄で手直しもできます。</p>
               </div>
             )}
-            <p className="text-xs text-slate-500 mt-2">※ 信頼度が下限({Math.round(threshold*100)}%)未満の項目は自動入力せず、従来の係数推定に任せています（破綻しません）。<span className="font-bold text-slate-600">推定</span>は仕上表が無いため部屋用途からの概算です。値は各入力欄でいつでも手直しできます。</p>
           </div>
         )}
       </div>
