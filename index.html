@@ -813,10 +813,12 @@ const ZUMEN_VAR_FIELD = { perimeter:'manualPerimeter', wall_area:'manualWallArea
 const ZUMEN_VAR_UNIT = { perimeter:'m', floor1_area:'㎡', floor2_area:'㎡', building_area:'㎡', roof_area:'㎡', wall_area:'㎡' };
 // 内訳明細の数量を直接埋める対象（項目No＝既存マスタ準拠）。仕上表が無い場合は推定可。
 const ZUMEN_LINE = [
+  { key:'cloth_area',    no:'F-4', label:'クロス総量(壁+天井)', unit:'㎡' },
   { key:'flooring_area', no:'F-5', label:'フローリング面積', unit:'㎡' },
-  { key:'cloth_area',    no:'F-4', label:'クロス面積',       unit:'㎡' },
   { key:'cf_area',       no:'F-6', label:'クッションフロア面積', unit:'㎡' },
   { key:'tatami_count',  no:'F-7', label:'畳',             unit:'帖' },
+  { key:'baseboard',     no:'F-8', label:'幅木',           unit:'m' },
+  { key:'cornice',       no:'F-9', label:'廻り縁',         unit:'m' },
   { key:'interior_doors',no:'G-3', label:'室内ドア',        unit:'枚' },
   { key:'sliding_doors', no:'G-4', label:'引き戸',          unit:'枚' }
 ];
@@ -827,8 +829,7 @@ function DrawingAIPanel({ project, sp, onChange }) {
   const setManualQty = (no, val) => onChange(p => ({ ...p, manualQuantities: { ...(p.manualQuantities || {}), [no]: val } }));
   const [apiKey, setApiKey] = useState(localStorage.getItem(ZUMEN_AI_KEY) || '');
   const [keyOpen, setKeyOpen] = useState(!localStorage.getItem(ZUMEN_AI_KEY));
-  const [file, setFile] = useState(null);
-  const [drawingType, setDrawingType] = useState('平面図');
+  const [files, setFiles] = useState([]);
   const [scaleHint, setScaleHint] = useState('');
   const [threshold, setThreshold] = useState(0.5);
   const [status, setStatus] = useState(null);
@@ -858,14 +859,16 @@ function DrawingAIPanel({ project, sp, onChange }) {
   };
   const clearKey = () => { localStorage.removeItem(ZUMEN_AI_KEY); setApiKey(''); setStatus({ msg: 'キーを消去しました', err: false }); };
 
-  const onFile = (f) => {
-    if (!f) return;
+  const addFiles = (fileList) => {
     const ok = ['image/png', 'image/jpeg', 'application/pdf'];
-    if (!ok.includes(f.type)) { setStatus({ msg: 'PDF・JPG・PNG のいずれかを選んでください', err: true }); return; }
-    const r = new FileReader();
-    r.onload = () => setFile({ base64: r.result.split(',')[1], mediaType: f.type, isPdf: f.type === 'application/pdf', name: f.name });
-    r.readAsDataURL(f);
+    Array.from(fileList || []).forEach(f => {
+      if (!ok.includes(f.type)) { setStatus({ msg: f.name + ' は対応外（PDF・JPG・PNGのみ）', err: true }); return; }
+      const r = new FileReader();
+      r.onload = () => setFiles(prev => [...prev, { base64: r.result.split(',')[1], mediaType: f.type, isPdf: f.type === 'application/pdf', name: f.name }]);
+      r.readAsDataURL(f);
+    });
   };
+  const removeFile = (idx) => setFiles(prev => prev.filter((_, i) => i !== idx));
 
   const buildSchema = () => ({
     type: 'object', additionalProperties: false,
@@ -882,7 +885,7 @@ function DrawingAIPanel({ project, sp, onChange }) {
       line_quantities: { type: 'array', items: {
         type: 'object', additionalProperties: false,
         properties: {
-          item: { type: 'string', enum: ['flooring_area','cloth_area','cf_area','tatami_count','interior_doors','sliding_doors'] },
+          item: { type: 'string', enum: ['cloth_area','flooring_area','cf_area','tatami_count','baseboard','cornice','interior_doors','sliding_doors'] },
           value: { type: 'number' }, unit: { type: 'string' },
           source: { type: 'string', enum: ['measured','estimated'] },
           confidence: { type: 'number' }, basis: { type: 'string' }
@@ -890,44 +893,57 @@ function DrawingAIPanel({ project, sp, onChange }) {
     }, required: ['scale_basis','values','line_quantities']
   });
 
-  const buildPrompt = () => {
-    let targets = '';
-    if (drawingType === '平面図') targets = '・外周長 perimeter（外形線の総延長, m）\n・1階床面積 floor1_area（㎡）\n・2階床面積 floor2_area（㎡, あれば）\n・建築面積 building_area（1階の床面積, ㎡）';
-    else if (drawingType === '立面図') targets = '・外壁面積 wall_area（開口控除後, ㎡）\n・屋根面積 roof_area（㎡, 読めれば）';
-    else targets = '・屋根面積 roof_area（実面積, ㎡）';
-    return [
-      'あなたは木造2階建て住宅の図面を読む積算アシスタントです。これは' + drawingType + 'です。',
-      '',
-      '【A. 中間変数】次を values に入れてください：', targets, '',
-      '【B. 内訳明細の数量】次を line_quantities に、読める/推定できる範囲で入れてください（見積の明細欄を直接埋めます）：',
-      '・flooring_area＝複合フローリングの面積(㎡)。平面図のLDK・居室など板張り床の合計。',
-      '・cloth_area＝ビニールクロスの面積(㎡)。各室の壁＋天井クロス概算。',
-      '・cf_area＝クッションフロアの面積(㎡)。洗面・トイレ等の水回り床。',
-      '・tatami_count＝畳の枚数(帖)。和室があれば。',
-      '・interior_doors＝室内ドアの枚数。平面図の建具記号から数える。',
-      '・sliding_doors＝引き戸の枚数。平面図の建具記号から数える。',
-      '※ 仕上表・建具表が無くても、各室の用途と床面積から【必ず】概算値を出してください（source="estimated"・confidence は低めでOK）。まったく見当がつかない項目だけ省略可。',
-      '',
-      '【縮尺の手がかり】' + (scaleHint.trim() ? scaleHint.trim() : '（指定なし。寸法線・寸法値・通り芯から縮尺を推定）'), '',
-      '【ルール】',
-      '・寸法線や記号から実際に読めた値は source="measured"、確信度に応じ confidence を 0.0〜1.0 で付ける。',
-      '・読めず用途から推定した値は source="estimated"、confidence を低めにする（無理に断定しない）。',
-      '・basis に「何を基準にどう算出/推定したか」を日本語で簡潔に書く。',
-      '・中間変数(values)で、この図面の種類から判断不能な項目は入れなくてよい。内訳明細(line_quantities)は上記のとおり概算でも極力埋める。',
-      '・木造2階建ての一般的な納まりを前提にしてよい。'
-    ].join('\n');
-  };
+  const buildPrompt = () => [
+    'あなたは木造在来工法住宅の積算担当者です。添付の図面（平面図・立面図・屋根伏図・パース等／手書き・印刷・写真いずれも可。複数枚あれば総合して判断）から「数量拾い出し」を行い、下記の数量をJSONで返します。',
+    '',
+    '【最重要原則】',
+    '1. 図面ファースト：図面に書かれた寸法線・面積表・室名・帖数・建具記号・勾配記号を、いかなる前提よりも優先する。',
+    '2. 絶対に「情報不足で算出できない」で止めない。読めない箇所は910mmグリッドと下記の標準仮定で補い、必ず数値を出す。',
+    '3. 図面から実測した値は source="measured"（confidence高め0.7〜0.95）、グリッドや標準仮定からの推定は source="estimated"（confidence低め0.3〜0.6）。',
+    '',
+    '【標準仮定（図面に記載が無い場合のみ適用）】',
+    'モジュール910mm／天井高2400mm／幅木H60／廻り縁あり／在来3寸／軒の出455mm／1帖=1.62㎡。',
+    '【開口控除の標準値（建具記号で特定できない場合）】掃出窓3.5㎡・腰窓1.8㎡・小窓0.5㎡／幅木控除：室内ドア1.6m・引戸1.7m。',
+    '【建具記号の読み方】例 16524 → W1600×H2400（W=上3桁×10mm、H=下2桁×100mm）。種別表記（引違/掃出/FIX/ドア）と併せて区分。',
+    '',
+    '【読み取り手順】①面積表があれば正とする ②各階外形(W×D)を910で割付 ③室名と帖数(帖記載=実測,無記載=グリッド推定) ④開口部を全数 ⑤屋根勾配記号 ⑥段違い・下屋・吹抜・UB・土間の有無。',
+    '',
+    '【縮尺の手がかり】' + (scaleHint.trim() ? scaleHint.trim() : '（指定なし。図面の寸法線・通り芯・面積表から割り出す）'),
+    '',
+    '【出力する中間変数 values】',
+    '・perimeter 外周長(m)：凹凸を反映した建物外周の総延長',
+    '・building_area 建築面積(㎡)：1階の床面積',
+    '・floor1_area / floor2_area：各階床面積(㎡)',
+    '・wall_area 外壁見付面積(㎡)：外周長×平均壁高−開口控除。段違い・下屋は高さ帯ごとに分割して合算。',
+    '・roof_area 屋根面積(㎡)：屋根投影面積×勾配補正(3寸×1.05,3.5寸×1.06,4寸×1.08,5寸×1.12)。下屋は別途加算。',
+    '',
+    '【出力する内訳明細の数量 line_quantities（仕上表が無くても標準仮定で必ず全8項目を概算する）】',
+    '・cloth_area クロス総量(㎡)＝壁クロス[室別:周長×天井高−開口控除]＋天井クロス[室別:床面積]。UB(ユニットバス)は除外。',
+    '・flooring_area フローリング(㎡)：板張り仕上げの室の床面積合計',
+    '・cf_area クッションフロア(㎡)：洗面・トイレ等の水回り床',
+    '・tatami_count 畳(帖)：和室があれば帖数（無ければ0でなく省略可）',
+    '・baseboard 幅木(m)：室別[周長−建具開口幅]の合計。UB除外。',
+    '・cornice 廻り縁(m)：室別周長の合計。勾配天井・省略部は控除。',
+    '・interior_doors 室内ドア(枚)：開き戸の枚数',
+    '・sliding_doors 引戸(枚)：引戸・折戸の枚数',
+    '',
+    '【記入ルール】',
+    '・各値の basis に「①図面からの読取寸法 → ②計算式 → ③結果」を簡潔に書く（例：LDK壁=周長22.0m×2.4m−開口5.0=47.8㎡）。',
+    '・数量は小数第1位まで。1帖=1.62㎡。',
+    '・line_quantities は上記のうち該当する項目を、読めなくても標準仮定で必ず概算して estimated で返す（空にしない）。',
+    '・scale_basis に、縮尺・外形をどう確定したかを書く。'
+  ].join('\n');
 
   const analyze = async () => {
     if (!apiKey) { setStatus({ msg: 'まず🔑APIキーを設定してください', err: true }); setKeyOpen(true); return; }
-    if (!file) { setStatus({ msg: '図面をアップロードしてください', err: true }); return; }
-    setBusy(true); setResult(null); setStatus({ msg: 'AIが図面を解析中…（数十秒かかることがあります）', err: false });
-    const sourceBlock = file.isPdf
-      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: file.base64 } }
-      : { type: 'image', source: { type: 'base64', media_type: file.mediaType, data: file.base64 } };
+    if (!files.length) { setStatus({ msg: '図面をアップロードしてください', err: true }); return; }
+    setBusy(true); setResult(null); setStatus({ msg: 'AIが図面を積算中…（図面の枚数により30秒〜2分かかることがあります）', err: false });
+    const blocks = files.map(f => f.isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: f.base64 } }
+      : { type: 'image', source: { type: 'base64', media_type: f.mediaType, data: f.base64 } });
     const body = {
-      model: 'claude-opus-4-8', max_tokens: 4096,
-      messages: [{ role: 'user', content: [sourceBlock, { type: 'text', text: buildPrompt() }] }],
+      model: 'claude-opus-4-8', max_tokens: 8000,
+      messages: [{ role: 'user', content: [...blocks, { type: 'text', text: buildPrompt() }] }],
       output_config: { format: { type: 'json_schema', schema: buildSchema() } }
     };
     try {
@@ -970,8 +986,8 @@ function DrawingAIPanel({ project, sp, onChange }) {
   return (
     <div className="mb-4 bg-amber-50 border-2 border-amber-300 rounded-lg overflow-hidden">
       <div className="px-4 py-3 bg-amber-100 flex items-center gap-2">
-        <span className="font-bold text-amber-900">🧪 図面AIで自動入力（実験機能）</span>
-        <span className="text-xs text-amber-700">図面を放り込むと、外周長・床面積などをAIが読んで下の欄へ入れます</span>
+        <span className="font-bold text-amber-900">🧪 図面AIで積算（実験機能）</span>
+        <span className="text-xs text-amber-700">平面図・立面図などを放り込むと、外周長・外壁・クロス・幅木などをAIが拾い、入力欄へ反映します</span>
       </div>
       <div className="p-4 space-y-3">
         {/* APIキー */}
@@ -988,38 +1004,35 @@ function DrawingAIPanel({ project, sp, onChange }) {
             </div>
           )}
         </div>
-        {/* アップロード */}
+        {/* アップロード（複数可：平面図＋立面図＋パース等をまとめて入れると精度UP） */}
         <div onClick={() => fileRef.current && fileRef.current.click()}
           onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
-          onDrop={e => { e.preventDefault(); setDrag(false); onFile(e.dataTransfer.files[0]); }}
+          onDrop={e => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}
           className={'border-2 border-dashed rounded-lg p-4 text-center cursor-pointer ' + (drag ? 'border-amber-500 bg-amber-100' : 'border-amber-300 bg-white')}>
-          {file ? (
-            <div className="flex items-center justify-center gap-3">
-              {file.isPdf ? <span className="font-bold">📄 {file.name}</span> : <img src={'data:' + file.mediaType + ';base64,' + file.base64} alt="図面" className="max-h-28 rounded border" />}
-              <span className="text-sm text-slate-600">{file.isPdf ? '' : file.name}</span>
-            </div>
-          ) : (
-            <div><div className="text-3xl">📐</div><div className="font-bold text-sm">図面をドラッグ＆ドロップ／タップして選択</div><div className="text-xs text-slate-500">PDF / JPG / PNG</div></div>
-          )}
-          <input ref={fileRef} type="file" accept="image/png,image/jpeg,application/pdf" className="hidden" onChange={e => onFile(e.target.files[0])} />
+          <div className="text-3xl">📐</div>
+          <div className="font-bold text-sm">図面をドラッグ＆ドロップ／タップして選択（複数まとめて可）</div>
+          <div className="text-xs text-slate-500">平面図＋立面図＋パースを一緒に入れるほど精度が上がります（PDF / JPG / PNG）</div>
+          <input ref={fileRef} type="file" accept="image/png,image/jpeg,application/pdf" multiple className="hidden" onChange={e => { addFiles(e.target.files); e.target.value = ''; }} />
         </div>
-        {/* 種別・縮尺 */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <label className="text-sm font-bold">図面の種類
-            <select value={drawingType} onChange={e => setDrawingType(e.target.value)} className="w-full border-2 border-slate-300 rounded px-2 py-2 mt-1 font-normal">
-              <option value="平面図">平面図（外周長・床面積）</option>
-              <option value="立面図">立面図（外壁面積・屋根面積）</option>
-              <option value="屋根伏図">屋根伏図（屋根面積）</option>
-            </select>
-          </label>
-          <label className="text-sm font-bold">縮尺の手がかり（任意）
-            <input value={scaleHint} onChange={e => setScaleHint(e.target.value)} placeholder="例：南面通り芯7280mm／1マス910mm" className="w-full border-2 border-slate-300 rounded px-2 py-2 mt-1 font-normal" />
-          </label>
-        </div>
+        {files.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {files.map((f, i) => (
+              <div key={i} className="flex items-center gap-2 bg-white border border-amber-200 rounded px-2 py-1">
+                {f.isPdf ? <span className="text-lg">📄</span> : <img src={'data:' + f.mediaType + ';base64,' + f.base64} alt="" className="h-10 w-10 object-cover rounded" />}
+                <span className="text-xs text-slate-600 max-w-[140px] truncate">{f.name}</span>
+                <button type="button" onClick={e => { e.stopPropagation(); removeFile(i); }} className="text-red-700 font-bold text-sm px-1">✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {/* 縮尺の手がかり */}
+        <label className="block text-sm font-bold">縮尺の手がかり（任意・精度の生命線）
+          <input value={scaleHint} onChange={e => setScaleHint(e.target.value)} placeholder="例：南面通り芯7280mm／面積表に延床104㎡／1マス910mm" className="w-full border-2 border-slate-300 rounded px-2 py-2 mt-1 font-normal" />
+        </label>
         {/* 解析ボタン */}
         <button type="button" onClick={analyze} disabled={busy}
           className={'w-full text-white font-bold py-3 rounded-lg ' + (busy ? 'bg-slate-400' : 'bg-[#C85400] hover:bg-[#A84500]')}>
-          {busy ? '解析中…' : '🔍 図面をAIで読み取って入力欄に反映'}
+          {busy ? '積算中…（少々お待ちください）' : '🔍 図面をAIで積算して入力欄に反映'}
         </button>
         {status && <p className={'text-sm font-bold ' + (status.err ? 'text-red-700' : 'text-green-700')}>{status.msg}</p>}
         {/* 反映結果：AIが読んだ値を全部表示。チェックで採用／外すと係数推定に戻る */}
